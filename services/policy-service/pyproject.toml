@@ -1,0 +1,17 @@
+[project]
+name = "policy-service"
+version = "0.1.0"
+description = "Guardrails, classification, and routing decisions made before retrieval."
+requires-python = ">=3.12"
+dependencies = [
+    "inagecas-shared",
+    "uvicorn[standard]>=0.30",
+    "prometheus-client>=0.20",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/policy_service"]

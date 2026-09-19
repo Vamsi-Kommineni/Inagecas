@@ -1,0 +1,62 @@
+groups:
+  - name: inagecas
+    rules:
+      - alert: HighRefusalRate
+        expr: >
+          sum(rate(inagecas_answers_total{status="refused"}[15m]))
+          / clamp_min(sum(rate(inagecas_answers_total[15m])), 1) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High answer refusal rate"
+          description: "More than 50% of answers were refused over the last 15 minutes."
+
+      - alert: LowRetrievalConfidence
+        expr: >
+          histogram_quantile(0.5, sum(rate(inagecas_retrieval_top_score_bucket[15m])) by (le)) < 0.4
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low retrieval confidence"
+          description: "Median retrieval top score has been below 0.4 for 15 minutes."
+
+      - alert: HighEscalationRate
+        expr: >
+          sum(rate(inagecas_escalations_total[15m]))
+          / clamp_min(sum(rate(inagecas_answers_total[15m])), 1) > 0.3
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High escalation rate"
+          description: "More than 30% of requests are escalating to a human."
+
+      - alert: EscalationsLost
+        expr: sum(increase(inagecas_escalation_failures_total[15m])) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Escalations could not be filed"
+          description: "A request that needed a human could not be handed off in the last 15 minutes."
+
+      - alert: OcrFailureRate
+        expr: >
+          sum(rate(inagecas_ocr_total{readable="false"}[30m]))
+          / clamp_min(sum(rate(inagecas_ocr_total[30m])), 1) > 0.5
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High OCR failure rate"
+          description: "More than half of processed images are unreadable."
+
+      - alert: ServiceErrors
+        expr: sum(rate(http_requests_total{status=~"5.."}[5m])) by (job) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "5xx errors on {{ $labels.job }}"
+          description: "{{ $labels.job }} is returning server errors."

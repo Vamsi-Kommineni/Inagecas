@@ -1,0 +1,10 @@
+apiVersion: 1
+providers:
+  - name: inagecas
+    orgId: 1
+    folder: Inagecas
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /etc/grafana/dashboards

@@ -1,0 +1,309 @@
+# Full local stack: datastores, model serving, the seven services, and the
+# observability tools. Copy .env.example to .env first.
+#
+# Image tags are pinned for reproducibility; bump them deliberately.
+#
+# Only the gateway (8000) listens on every interface. The other published
+# ports are operator tools, some without auth (Qdrant, Prometheus), so they
+# are bound to 127.0.0.1 and never reachable from the network.
+name: inagecas
+
+x-app-env: &app-env
+  env_file: [.env]
+
+services:
+  # --- Datastores ----------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1", "--appendonly", "no"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  # --- Model serving -------------------------------------------------------
+  ollama:
+    image: ollama/ollama:0.6.2
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  # One-shot: pulls the Ollama-backed models (fallbacks and embeddings), then exits.
+  ollama-pull:
+    image: ollama/ollama:0.6.2
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      MODELS: >-
+        ${LITELLM_CHAT_MODEL} ${LITELLM_JUDGE_MODEL:-} ${LITELLM_VISION_MODEL:-}
+        ${LITELLM_CHAT_FALLBACK:-ollama_chat/llama3.2:3b}
+        ${LITELLM_JUDGE_FALLBACK:-ollama_chat/llama3.2:3b}
+        ${LITELLM_VISION_FALLBACK:-ollama_chat/gemma3:latest}
+        ${LITELLM_EMBED_MODEL}
+    entrypoint: ["/bin/sh", "-c"]
+    # Only Ollama-backed models are pulled; hosted providers need no download.
+    command:
+      - |
+        for m in $$MODELS; do
+          case "$$m" in ollama*/*) ollama pull "$${m#*/}" || exit 1 ;; esac
+        done
+    restart: "no"
+
+  litellm:
+    # main-stable is a moving tag, so the digest is what pins it (LiteLLM 1.90.3).
+    image: ghcr.io/berriai/litellm:main-stable@sha256:e4b91a2de9367ab0987baaa767b2283390badd5a361357993de1a05f027edc22
+    restart: unless-stopped
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      OLLAMA_API_BASE: ${OLLAMA_BASE_URL}
+      LITELLM_CHAT_MODEL: ${LITELLM_CHAT_MODEL}
+      LITELLM_JUDGE_MODEL: ${LITELLM_JUDGE_MODEL:-${LITELLM_CHAT_MODEL}}
+      LITELLM_VISION_MODEL: ${LITELLM_VISION_MODEL:-${LITELLM_CHAT_MODEL}}
+      LITELLM_EMBED_MODEL: ${LITELLM_EMBED_MODEL}
+      LITELLM_CHAT_FALLBACK: ${LITELLM_CHAT_FALLBACK:-ollama_chat/llama3.2:3b}
+      LITELLM_JUDGE_FALLBACK: ${LITELLM_JUDGE_FALLBACK:-ollama_chat/llama3.2:3b}
+      LITELLM_VISION_FALLBACK: ${LITELLM_VISION_FALLBACK:-ollama_chat/gemma3:latest}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+    command: ["--config", "/etc/litellm/config.yaml", "--port", "4000"]
+    volumes:
+      - ./infra/litellm/config.yaml:/etc/litellm/config.yaml:ro
+    ports:
+      - "127.0.0.1:4000:4000"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:4000/health/liveliness').getcode()==200 else 1)"
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # --- Schema migrations (one-shot, reuses the gateway image) --------------
+  migrate:
+    image: inagecas/api-gateway
+    <<: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
+  # --- Application services ------------------------------------------------
+  api-gateway:
+    build:
+      context: .
+      dockerfile: services/api-gateway/Dockerfile
+    image: inagecas/api-gateway
+    restart: unless-stopped
+    <<: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      litellm:
+        condition: service_healthy
+      retrieval-service:
+        condition: service_started
+      answer-service:
+        condition: service_started
+      policy-service:
+        condition: service_started
+      vision-service:
+        condition: service_started
+      escalation-service:
+        condition: service_started
+    ports:
+      - "8000:8000"
+
+  retrieval-service:
+    build:
+      context: .
+      dockerfile: services/retrieval-service/Dockerfile
+    image: inagecas/retrieval-service
+    restart: unless-stopped
+    <<: *app-env
+    volumes:
+      - model_cache:/app/.cache
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      litellm:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  answer-service:
+    build:
+      context: .
+      dockerfile: services/answer-service/Dockerfile
+    image: inagecas/answer-service
+    restart: unless-stopped
+    <<: *app-env
+    depends_on:
+      litellm:
+        condition: service_healthy
+
+  policy-service:
+    build:
+      context: .
+      dockerfile: services/policy-service/Dockerfile
+    image: inagecas/policy-service
+    restart: unless-stopped
+    <<: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      litellm:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  vision-service:
+    build:
+      context: .
+      dockerfile: services/vision-service/Dockerfile
+    image: inagecas/vision-service
+    restart: unless-stopped
+    <<: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  escalation-service:
+    build:
+      context: .
+      dockerfile: services/escalation-service/Dockerfile
+    image: inagecas/escalation-service
+    restart: unless-stopped
+    <<: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  ingestion-worker:
+    build:
+      context: .
+      dockerfile: services/ingestion-worker/Dockerfile
+    image: inagecas/ingestion-worker
+    restart: unless-stopped
+    <<: *app-env
+    volumes:
+      - model_cache:/app/.cache
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      litellm:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # --- Observability -------------------------------------------------------
+  otel-collector:
+    image: otel/opentelemetry-collector:0.115.0
+    restart: unless-stopped
+    command: ["--config", "/etc/otel/collector.yaml"]
+    volumes:
+      - ./infra/otel/collector.yaml:/etc/otel/collector.yaml:ro
+    depends_on:
+      - tempo
+
+  tempo:
+    image: grafana/tempo:2.6.1
+    restart: unless-stopped
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    volumes:
+      - ./infra/tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro
+      - tempo_data:/var/tempo
+    ports:
+      - "127.0.0.1:3200:3200"
+
+  prometheus:
+    image: prom/prometheus:v3.0.0
+    restart: unless-stopped
+    command: ["--config.file=/etc/prometheus/prometheus.yml"]
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infra/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+      - tempo
+    ports:
+      - "127.0.0.1:3000:3000"
+
+volumes:
+  postgres_data:
+  redis_data:
+  qdrant_data:
+  ollama_data:
+  model_cache:
+  tempo_data:
+  prometheus_data:
+  grafana_data:

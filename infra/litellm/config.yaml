@@ -1,0 +1,56 @@
+# LiteLLM proxy: maps the logical aliases the services use (chat, judge, vision,
+# embed) to real models. Each chat-style alias has a hosted primary and a local
+# Ollama fallback; when the primary errors, times out or is rate limited,
+# LiteLLM retries the call on the ``-local`` alias. The services never see the
+# switch. Embeddings stay local so the vectors in Qdrant keep one geometry.
+#
+# Every model string comes from .env. Provider keys are read from GROQ_API_KEY
+# and OPENROUTER_API_KEY; Ollama's address from OLLAMA_API_BASE.
+model_list:
+  - model_name: chat
+    litellm_params:
+      model: os.environ/LITELLM_CHAT_MODEL
+      # gpt-oss always reasons; keep it short so answers fit in max_tokens.
+      reasoning_effort: low
+  - model_name: chat-local
+    litellm_params:
+      model: os.environ/LITELLM_CHAT_FALLBACK
+
+  - model_name: judge
+    litellm_params:
+      model: os.environ/LITELLM_JUDGE_MODEL
+      # One-word verdicts: no thinking, or the tokens go to <think> not the answer.
+      reasoning_effort: none
+  - model_name: judge-local
+    litellm_params:
+      model: os.environ/LITELLM_JUDGE_FALLBACK
+
+  - model_name: vision
+    litellm_params:
+      model: os.environ/LITELLM_VISION_MODEL
+  - model_name: vision-local
+    litellm_params:
+      model: os.environ/LITELLM_VISION_FALLBACK
+
+  - model_name: embed
+    litellm_params:
+      model: os.environ/LITELLM_EMBED_MODEL
+    model_info:
+      mode: embedding
+
+router_settings:
+  fallbacks:
+    - chat: [chat-local]
+    - judge: [judge-local]
+    - vision: [vision-local]
+  # One quick retry on the primary, then fall back; a dead provider must not
+  # hold a ticket for minutes.
+  num_retries: 1
+  retry_after: 2
+
+litellm_settings:
+  drop_params: true
+  request_timeout: 600
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

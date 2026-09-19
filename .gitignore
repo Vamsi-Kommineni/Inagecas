@@ -1,0 +1,64 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Environments
+.venv/
+venv/
+
+# Secrets. Only the example file, which holds placeholders, is committed.
+.env
+.env.*
+!.env.example
+.envrc
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+id_rsa*
+id_ed25519*
+secrets/
+credentials*.json
+service-account*.json
+.netrc
+.pypirc
+
+# Local compose overrides can carry ports, keys and paths of one machine.
+docker-compose.override.yml
+
+# uv
+# uv.lock is committed on purpose for reproducible builds.
+
+# Tooling caches
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Local data and model volumes
+data/
+volumes/
+*.sqlite3
+
+# Editors, assistants, OS
+.idea/
+.vscode/
+.claude/
+CLAUDE.local.md
+.cursor/
+.aider*
+*.swp
+.DS_Store
+Thumbs.db
+
+# Logs and dumps
+*.log
+*.dump
+*.sql.gz

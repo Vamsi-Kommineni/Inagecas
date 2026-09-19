@@ -1,0 +1,18 @@
+# Route LiteLLM to an Ollama that already runs on the host instead of the one
+# inside the compose network. Useful on Docker Desktop, where the VM's memory
+# cap is far below the host's, and on Macs, where the host Ollama gets the GPU.
+#
+#   ollama pull llama3.2:3b && ollama pull gemma3 && ollama pull nomic-embed-text   # once, on the host
+#   docker compose -f docker-compose.yml -f docker-compose.host-ollama.yml up -d
+#
+# The in-VM ollama container still starts (LiteLLM depends on it) but never
+# loads a model, so it costs little. The in-VM pull is skipped: the models
+# have to be on the host.
+services:
+  litellm:
+    environment:
+      OLLAMA_API_BASE: http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+  ollama-pull:
+    profiles: ["in-vm-ollama"]

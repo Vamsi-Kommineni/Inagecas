@@ -1,0 +1,111 @@
+[project]
+name = "inagecas"
+version = "0.1.0"
+description = "AI customer support pipeline that answers strictly from approved documentation or refuses, on hosted models with local fallbacks."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+dependencies = [
+    "inagecas-shared",
+    "api-gateway",
+    "ingestion-worker",
+    "retrieval-service",
+    "answer-service",
+    "policy-service",
+    "vision-service",
+    "escalation-service",
+]
+
+# The root project exists only to tie the workspace together for local
+# development and testing. Each service is installed and run on its own.
+[dependency-groups]
+dev = [
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=5",
+    "respx>=0.21",
+    "asgi-lifespan>=2.1",
+    "bandit>=1.7",
+    "pip-audit>=2.7",
+    "pre-commit>=3.8",
+    "alembic>=1.13",
+    "pyyaml>=6",
+    "types-pyyaml>=6",
+]
+
+[tool.uv]
+# The root exists only to assemble the workspace for development; it is not a
+# distributable package itself.
+package = false
+
+[tool.uv.workspace]
+members = ["packages/*", "services/*"]
+
+[tool.uv.sources]
+inagecas-shared = { workspace = true }
+api-gateway = { workspace = true }
+ingestion-worker = { workspace = true }
+retrieval-service = { workspace = true }
+answer-service = { workspace = true }
+policy-service = { workspace = true }
+vision-service = { workspace = true }
+escalation-service = { workspace = true }
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["packages/shared/src", "services/*/src", "evaluation", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "S", "ASYNC", "RUF"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI relies on callables in argument defaults (Depends, Query, Header, ...).
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Query",
+    "fastapi.Header",
+    "fastapi.Path",
+    "fastapi.Security",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106"]
+"migrations/**" = ["E501"]
+# arq's WorkerSettings is a plain config class with list/callable attributes.
+"services/ingestion-worker/src/ingestion_worker/worker.py" = ["RUF012"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_unused_ignores = true
+warn_redundant_casts = true
+disallow_untyped_defs = true
+no_implicit_optional = true
+check_untyped_defs = true
+ignore_missing_imports = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["tests.*", "migrations.*"]
+disallow_untyped_defs = false
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
+filterwarnings = ["error::DeprecationWarning:inagecas_shared.*"]
+
+[tool.coverage.run]
+branch = true
+source = [
+    "inagecas_shared",
+    "api_gateway",
+    "ingestion_worker",
+    "retrieval_service",
+    "answer_service",
+    "policy_service",
+    "vision_service",
+    "escalation_service",
+]

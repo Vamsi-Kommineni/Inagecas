@@ -1,0 +1,28 @@
+global:
+  scrape_interval: 15s
+
+rule_files:
+  - alerts.yml
+
+scrape_configs:
+  - job_name: api-gateway
+    static_configs:
+      - targets: ["api-gateway:8000"]
+  - job_name: retrieval-service
+    static_configs:
+      - targets: ["retrieval-service:8000"]
+  - job_name: answer-service
+    static_configs:
+      - targets: ["answer-service:8000"]
+  - job_name: policy-service
+    static_configs:
+      - targets: ["policy-service:8000"]
+  - job_name: vision-service
+    static_configs:
+      - targets: ["vision-service:8000"]
+  - job_name: escalation-service
+    static_configs:
+      - targets: ["escalation-service:8000"]
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
